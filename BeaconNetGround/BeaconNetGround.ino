@@ -75,9 +75,24 @@ TinyGPSCustom predictLon (RadioGPS, "PEDGP", 5);
 #define CMD_TIMEOUT 5 //how long to stay in command mode before timing out 
 #define POS_TIMEOUT 5 //how long to display my position before timing out
 
+#define BALLOON_DATA 1
+#define MESSAGE_DATA 2
+#define PREDICT_DATA 3
+#define IMMEADIATE 0
+
 bool displayMessageMode = true; //Do you want to display a message or not?  
 bool commandMode = false;
 bool debugMode = true;
+
+unsigned long myDate;
+unsigned long myTime;
+double myLatitude;
+double myLongitude;
+double myAltitude;
+double mySpeed;
+double myCourse;
+unsigned int mySats;
+double myHDOP;
 
 void setup()
 { 
@@ -94,12 +109,20 @@ void loop()
 {
   if(balloonTime.isUpdated())
   {
-    outputBalloonNMEA();
+    if(debugMode) Serial.println("****Received position update from balloon " + String(balloonID.value()));
+    outputNMEA(BALLOON_DATA);
   }
   
-  if(messageTxt.isUpdated())
+  if(messageTime.isUpdated())
   {
+    if(debugMode) Serial.println("****Received message from ground station " + String(messageID.value()));
     parseAndDisplayMessage();
+  }
+  
+  if(predictTime.isUpdated())
+  {
+    if(debugMode) Serial.println("****Received new predicted landing point for " + String(predictID.value()));
+    outputNMEA(PREDICT_DATA); //really not that great of an idea to have separate functions for the balloon and the
   }
   
   if(commandMode)
@@ -115,7 +138,9 @@ void createUserMessage()
   Serial.print("Msg>");
   String userMessage = Serial.readStringUntil('\n');
   
-  String sentence = "PEDGM,GID"+String(GROUND_ID)+","+String(balloonDate.value())+","+String(balloonTime.value())+","+String(LocalGPS.location.lat(),6)+","+String(LocalGPS.location.lng(),6)+","+String(LocalGPS.altitude.meters())+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
+  //TODO: Look for commas and astrix in the string and REMOVE THEM!
+  
+  String sentence = "PEDGM,GID"+String(GROUND_ID)+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(LocalGPS.location.lat(),6)+","+String(LocalGPS.location.lng(),6)+","+String(LocalGPS.altitude.meters())+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
   
   //Calculate the checksum
   int XORVal, i; //variable declaration for the following calculation
@@ -144,18 +169,18 @@ void createUserMessage()
 
 void displayMyPosition()
 {
-  if(debugMode) Serial.println("****Piping your position to the SerialUSB port.");
+  if(debugMode) Serial.println("****Piping your position to the Serial3 port.");
   
   unsigned long startTime = millis(); //get the starting time from the millisecond timer
   while((millis() - startTime) < (POS_TIMEOUT*1000))
   {
     if(Serial1.available())
     {
-      SerialUSB.write((char)Serial1.read());
+      Serial3.write((char)Serial1.read());
     }
   }
   
-  if(debugMode) Serial.println("****Done piping your location to the SerialUSB port.");
+  if(debugMode) Serial.println("****Done piping your location to the Serial3 port.");
 }
 
 void createPredictMessage()
@@ -169,7 +194,7 @@ void createPredictMessage()
   String sPredictLng = Serial.readStringUntil('\n');
   Serial.print("Yay!");
   
-  String sentence = "PEDGP,PID"+sPredictID+","+String(balloonDate.value())+","+String(balloonTime.value())+","+String(sPredictLat.toFloat(),6)+","+String(sPredictLng.toFloat(),6);
+  String sentence = "PEDGP,PID"+sPredictID+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(sPredictLat.toFloat(),6)+","+String(sPredictLng.toFloat(),6);
   
   //Calculate the checksum
   int XORVal, i; //variable declaration for the following calculation
@@ -213,14 +238,22 @@ void handleCommand()
     }
   }
   
-  if(cmd == '?') Serial.println("\n--->Help goes here.");
-  else if (cmd == 'M') 
+  if(cmd == '?') //the help function
+  {
+    Serial.println("****M: Send user message.");
+    Serial.println("****P: Send predict message.");
+    Serial.println("****I: Place me on the map.");
+    Serial.println("****C: Send a command.");
+    Serial.println("****D: Toggle debug mode.");
+  }
+  
+  else if (cmd == 'M') //the user message generation functiton
   {
     if(debugMode) Serial.println("\n****You want to send a message.");
     createUserMessage();
   }
   
-  else if (cmd == 'P')
+  else if (cmd == 'P') //the predicted landing function
   {
     //if(debugMode) Serial.println("\n****You think you know the future.");
     createPredictMessage();
@@ -232,7 +265,10 @@ void handleCommand()
     displayMyPosition();
   }
   
-  else if (cmd == 'C') Serial.println("\n--->You want to be in control.");
+  else if (cmd == 'C') //send a command
+  {
+    if(debugMode) Serial.println("\n--->You want to be in control.  Not implemented.");
+  }
   
   else if (cmd == 'D') //Handle the request to go into debug mode
   {
@@ -254,31 +290,158 @@ void handleCommand()
   commandMode = false;
 }
 
-
-
-void outputBalloonNMEA()
+void collectBalloonData()
 {
-  String airTime = balloonTime.value();
-  String balloonLatitude;
-  float balloonLatValue;
-  int balloonLatDegrees;
-  float balloonLatMinutes;
+  myDate = (unsigned long)(String(balloonDate.value()).toFloat());
+  myTime = (unsigned long)(String(balloonTime.value()).toFloat());
+  myLatitude = abs(String(balloonLat.value()).toFloat());
+  myLongitude = abs(String(balloonLon.value()).toFloat());
+  myAltitude = String(balloonAlt.value()).toFloat();
+  mySpeed = String(balloonSpd.value()).toFloat();
+  myCourse = String(balloonCse.value()).toFloat();
+  mySats = (unsigned int)(String(balloonNumSats.value()).toInt());
+  myHDOP = String(balloonHDOP.value()).toFloat();
+}
+
+void collectMessageData()
+{
+}
+
+void collectPredictData()
+{
+}
+
+
+void outputNMEA(int mode)
+{
+  if(mode==BALLOON_DATA) collectBalloonData();
+  else if(mode==MESSAGE_DATA) collectMessageData();
+  else if(mode==PREDICT_DATA) collectPredictData();
   
-  balloonLatitude = balloonLat.value();
-  balloonLatValue = balloonLatitude.toFloat();
-  balloonLatDegrees = int(balloonLatValue);
-  balloonLatMinutes = (balloonLatValue - balloonLatDegrees)*60;
-  if(balloonLatMinutes >= 10) balloonLatitude = String(balloonLatDegrees) + String(balloonLatMinutes,3);
-  else if(balloonLatMinutes < 10) balloonLatitude = String(balloonLatDegrees) + "0" + String(balloonLatMinutes,3);
+  if(debugMode)
+  {
+    Serial.println("Date: " + String(myDate));
+    Serial.println("Time: " + String(myTime));
+    Serial.println("Lat : " + String(myLatitude, 6));
+    Serial.println("Lng : " + String(myLongitude, 6));
+    Serial.println("Alt : " + String(myAltitude));
+    Serial.println("Spd : " + String(mySpeed));
+    Serial.println("Cse : " + String(myCourse));
+    Serial.println("Sats: " + String(mySats));
+    Serial.println("HDOP: " + String(myHDOP));
+  }
   
-  Serial.print("Balloon lat raw: ");
-  Serial.println(String(balloonLatValue,6));
-  Serial.print("Balloon lat degrees: ");
-  Serial.print(String(balloonLatDegrees));
-  Serial.print(" Balloon lat minutes: ");
-  Serial.print(String(balloonLatMinutes,3));
-  Serial.print(" Result: ");
-  Serial.println(balloonLatitude);
+  //Pad date here...
+  String sMyDate;
+  if(myDate > 99999) sMyDate = String(myDate);
+  else sMyDate = "0" + String(myDate); 
+  
+  //Pad time here...
+  String sMyTime;
+  myTime = myTime / 100; //remove the trailign DeciSecond zeros from the time
+  if(myTime > 99999) sMyTime = String(myTime);
+  else if(myTime > 9999) sMyTime = "0" + String(myTime);
+  else if(myTime > 999) sMyTime = "00" + String(myTime);
+  else if(myTime > 99) sMyTime = "000" + String(myTime);
+  else if(myTime > 9) sMyTime = "0000" + String(myTime);
+  else if(myTime > 0) sMyTime = "00000" + String(myTime);
+  else sMyTime = "000000";
+  
+  //Pad latitude here... not worring about latitudes less than 10, as we're not flying in Central America
+  int myLatDeg;
+  float myLatMin;
+  String sMyLat;
+  myLatDeg = int(myLatitude); //get just the degrees of the latitude
+  myLatMin = (myLatitude - myLatDeg) * 60; // calculate minutes from the decimal remainder of the original
+  if(myLatMin > 9) sMyLat = String(myLatDeg) + String(myLatMin,3);
+  else sMyLat = String(myLatDeg) + "0" + String(myLatMin,3);
+  
+  //Pad longitude here... only worrying about something less than 100, in case we're east of Lincoln, NE
+  int myLngDeg;
+  float myLngMin;
+  String sMyLngDeg;
+  String sMyLngMin;
+  String sMyLng;
+  myLngDeg = int(myLongitude); 
+  myLngMin = (myLongitude - myLngDeg) * 60;
+  //Pad the degrees field here
+  if(myLngDeg > 99) sMyLngDeg = String(myLngDeg);
+  else sMyLngDeg = "0" + String(myLngDeg);
+  //Then pad the degrees
+  if(myLngMin > 9) sMyLngMin = String(myLngMin,3);
+  else sMyLngMin = "0" + String(myLngMin,3);
+  //Put it together
+  sMyLng = sMyLngDeg + sMyLngMin;
+  
+  //Pad numSats here
+  String sMySats;
+  if(mySats > 9) sMySats = String(mySats);
+  else sMySats = "0" + String(mySats);
+  
+  //Pad speed here
+  String sMySpeed;
+  if(mySpeed > 99) sMySpeed = String(mySpeed, 1);
+  else if(mySpeed > 9) sMySpeed = "0" + String(mySpeed, 1);
+  else if(mySpeed > 0) sMySpeed = "00" + String(mySpeed, 1);
+
+  //Pad course here
+  String sMyCourse;
+  if(myCourse > 99) sMyCourse = String(myCourse, 1);
+  else if(myCourse > 9) sMyCourse = "0" + String(myCourse, 1);
+  else if(myCourse > 0) sMyCourse = "00" + String(myCourse, 1);
+
+  
+  //the GGA sentence
+  String sentence = "GPGGA,"+sMyTime+","+sMyLat+",N,"+sMyLng+",W,1,"+sMySats+","+String(myHDOP)+","+String(myAltitude)+",M,30.0,M,,";
+  
+  //Calculate the checksum
+  int XORVal, i; //variable declaration for the following calculation
+  for(XORVal = 0, i = 0; i < sentence.length(); i++)
+  {
+    int c = (unsigned char)sentence[i];
+    XORVal ^= c;
+  }
+  
+  //send it out the computer port
+  Serial3.print("$"); //the missing dollar sign
+  Serial3.print(sentence);
+  Serial3.print("*");
+  Serial3.println(XORVal, HEX);
+  
+  if(debugMode)
+  {
+    Serial.print("\nOutput String: ");
+    Serial.print("$"); 
+    Serial.print(sentence);
+    Serial.print("*");
+    Serial.println(XORVal, HEX);
+  }
+  
+  //The RMC sentence, hard coded for magnetic variation in CO
+  sentence = "GPRMC,"+sMyTime+",A,"+sMyLat+",N,"+sMyLng+",W,"+sMySpeed+","+sMyCourse+","+sMyDate+",008.1,E";
+  
+  //Calculate the checksum
+  XORVal, i; //variable declaration for the following calculation
+  for(XORVal = 0, i = 0; i < sentence.length(); i++)
+  {
+    int c = (unsigned char)sentence[i];
+    XORVal ^= c;
+  }
+  
+  //send it out the computer port
+  Serial3.print("$"); //the missing dollar sign
+  Serial3.print(sentence);
+  Serial3.print("*");
+  Serial3.println(XORVal, HEX);
+  
+  if(debugMode)
+  {
+    Serial.print("\nOutput String: ");
+    Serial.print("$"); 
+    Serial.print(sentence);
+    Serial.print("*");
+    Serial.println(XORVal, HEX);
+  }
 }
 
 void sendMessage()
