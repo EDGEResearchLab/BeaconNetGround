@@ -12,10 +12,10 @@ from ground) and $PEDGA (ack) sentences
 
 Port Assignments:
 Serial: Computer connection 1, all data + commands
-SerialUSB: NMEA Reconstruction (Future Ground Only, intended to be Tx only)
+SerialUSB: Future expansion - note that it appears that the SerialUSB goes away when Serial is connected... 
 Serial1: GPS (Rx only)
 Serial2: 9xTend (Tx/Rx) and OpenLog (Tx only)
-Serial3: Header (not connected - future expansion - could be used to replace Serial for Uno compatibility)
+Serial3: Header NMEA output - intended to be Tx only
 
 Analog inputs aren't used on the ground units.  For now.
 */
@@ -69,12 +69,11 @@ TinyGPSCustom predictTime (RadioGPS, "PEDGP", 3);
 TinyGPSCustom predictLat (RadioGPS, "PEDGP", 4);
 TinyGPSCustom predictLon (RadioGPS, "PEDGP", 5);
 
-#define DEMO_LOCAL_GPS 1 //set to 1 to simulate local GPS data
-#define DEMO_RADIO_GPS 1 //set to 1 to simulate remote GPS data
 #define GROUND_ID 1 //this needs to be different for each ground system.  DON"T FOGET!
 #define CMD_TIMEOUT 5 //how long to stay in command mode before timing out 
 #define POS_TIMEOUT 5 //how long to display my position before timing out
 
+//the constants used for switching the source of the re-constituted GPS data
 #define BALLOON_DATA 1
 #define MESSAGE_DATA 2
 #define PREDICT_DATA 3
@@ -93,6 +92,7 @@ double mySpeed;
 double myCourse;
 unsigned int mySats;
 double myHDOP;
+String myID;
 
 void setup()
 { 
@@ -103,6 +103,8 @@ void setup()
   Serial2.begin(115200);
   Serial3.begin(115200);
   SerialUSB.begin(115200);
+  
+  myID = "GID"+String(GROUND_ID);
 }
 
 void loop()
@@ -122,7 +124,7 @@ void loop()
   if(predictTime.isUpdated())
   {
     if(debugMode) Serial.println("****Received new predicted landing point for " + String(predictID.value()));
-    outputNMEA(PREDICT_DATA); //really not that great of an idea to have separate functions for the balloon and the
+    outputNMEA(PREDICT_DATA, 5); 
   }
   
   if(commandMode)
@@ -136,11 +138,16 @@ void createUserMessage()
   Serial.setTimeout(30000);
   
   Serial.print("Msg>");
-  String userMessage = Serial.readStringUntil('\n');
+  String userMessage = Serial.readStringUntil('\r');
   
-  //TODO: Look for commas and astrix in the string and REMOVE THEM!
+  //TODO: TEST THE FOLLOWING CODE (it would be better to just remove the offending characters, but we'll stick with an error for now):
+  if((userMessage.indexOf('*') > 0) | (userMessage.indexOf(',') > 0))
+  {
+    Serial.print("\n ERROR: Strings must not contain commas or asterisks.  Try again.");
+    return;
+  }
   
-  String sentence = "PEDGM,GID"+String(GROUND_ID)+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(LocalGPS.location.lat(),6)+","+String(LocalGPS.location.lng(),6)+","+String(LocalGPS.altitude.meters())+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
+  String sentence = "PEDGM,"+myID+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(LocalGPS.location.lat(),6)+","+String(LocalGPS.location.lng(),6)+","+String(LocalGPS.altitude.meters())+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
   
   //Calculate the checksum
   int XORVal, i; //variable declaration for the following calculation
@@ -187,11 +194,11 @@ void createPredictMessage()
 {
   Serial.setTimeout(5000);
   Serial.print("Idn>");
-  String sPredictID = Serial.readStringUntil('\n');
+  String sPredictID = Serial.readStringUntil('\r');
   Serial.print("Lat>");
-  String sPredictLat = Serial.readStringUntil('\n');
+  String sPredictLat = Serial.readStringUntil('\r');
   Serial.print("Lng>");
-  String sPredictLng = Serial.readStringUntil('\n');
+  String sPredictLng = Serial.readStringUntil('\r');
   Serial.print("Yay!");
   
   String sentence = "PEDGP,PID"+sPredictID+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(sPredictLat.toFloat(),6)+","+String(sPredictLng.toFloat(),6);
@@ -240,11 +247,12 @@ void handleCommand()
   
   if(cmd == '?') //the help function
   {
-    Serial.println("****M: Send user message.");
+    Serial.println("\n****M: Send user message.");
     Serial.println("****P: Send predict message.");
     Serial.println("****I: Place me on the map.");
-    Serial.println("****C: Send a command.");
+    Serial.println("****C: Send a command. (not supported)");
     Serial.println("****D: Toggle debug mode.");
+    Serial.println("****G: Change your station ID (beta)");
   }
   
   else if (cmd == 'M') //the user message generation functiton
@@ -284,10 +292,37 @@ void handleCommand()
     }
   }
   
+  else if (cmd == 'G')
+  {
+    if(debugMode) Serial.println("\n****Changing station ID.  Current ID is: " + myID);
+    changeStationID();
+  }
+  
   else if(cmd == ' ') Serial.println("\n--->Command mode time out.");
   else Serial.println("\n--->Unrecognized command.  What are you doing?");
   
   commandMode = false;
+}
+
+void changeStationID()
+{
+  Serial.setTimeout(10000);
+  Serial.println("\nThis feature is in beta; there isn't any error checking.  Be careful!");
+  Serial.print("Enter new station ID (or wait 10 seconds to set to default)> ");
+  
+  String newID = Serial.readStringUntil('\r');
+  
+  if(!newID.length()) 
+  {
+    Serial.println("\nID set to default.  ID is: " + myID);
+    return;
+  }
+  
+  myID = newID;
+  
+  Serial.println("\n ID Updated to: " + myID);
+  
+  Serial.setTimeout(1000);
 }
 
 void collectBalloonData()
@@ -299,18 +334,47 @@ void collectBalloonData()
   myAltitude = String(balloonAlt.value()).toFloat();
   mySpeed = String(balloonSpd.value()).toFloat();
   myCourse = String(balloonCse.value()).toFloat();
-  mySats = (unsigned int)(String(balloonNumSats.value()).toInt());
-  myHDOP = String(balloonHDOP.value()).toFloat();
+  
+  //hardcode these values, as they're not provided for messages...
+  mySats = 9;
+  myHDOP = 1.0;
 }
 
 void collectMessageData()
 {
+  myDate = (unsigned long)(String(messageDate.value()).toFloat());
+  myTime = (unsigned long)(String(messageTime.value()).toFloat());
+  myLatitude = abs(String(messageLat.value()).toFloat());
+  myLongitude = abs(String(messageLon.value()).toFloat());
+  myAltitude = String(messageAlt.value()).toFloat();
+  mySpeed = String(messageSpd.value()).toFloat();
+  myCourse = String(messageCse.value()).toFloat();
+  mySats = (unsigned int)(String(balloonNumSats.value()).toInt());
+  myHDOP = String(balloonHDOP.value()).toFloat();
 }
 
 void collectPredictData()
 {
+  myDate = (unsigned long)(String(predictDate.value()).toFloat());
+  myTime = (unsigned long)(String(predictTime.value()).toFloat());
+  myLatitude = abs(String(predictLat.value()).toFloat());
+  myLongitude = abs(String(predictLon.value()).toFloat());
+  
+  //hardcode these values, as they're not provided for prerdicted landing sites...
+  myAltitude = 1800.0;
+  mySpeed = 0.0;
+  myCourse = 0.0;
+  mySats = 9;
+  myHDOP = 1.0;
 }
 
+void outputNMEA(int mode, int repeats)
+{
+  for(int i=0; i<repeats; i++)
+  {
+    outputNMEA(mode);
+  }
+}
 
 void outputNMEA(int mode)
 {
@@ -444,17 +508,17 @@ void outputNMEA(int mode)
   }
 }
 
-void sendMessage()
-{
-  //send a message encoded in an NMEA wrapper with position info
-}
-
 void parseAndDisplayMessage()
 {
-  //when a message is received, handle pulling out the position info and displaying that on the map, if it's desired.  Also, display the message without the header and with a leading ---> so that it stands out.
+  Serial.println("\n----" + String(messageID.value()) + "> " + String(messageTxt.value()));
+  
+  if(debugMode)
+  {
+    Serial.println("Message received with the following position information included: ");
+  }
+  
+  outputNMEA(MESSAGE_DATA, 5); 
 }
-
-//To do: parse PEDGE messages, enable placement of my position on the map, enable sending and receiving messages
 
 
 /////////////////////////////////////////////////////////
@@ -518,177 +582,3 @@ void serialEventUSB() //Event handler / buffer flusher for the native USB port (
   }
 }
 
-
-
-
-/*
-#include <TinyGPS++.h>
-
-#define DEMO_MODE 0 //set this to 0 for flight configuration; otherwise, the two following switches matter
-#define ANALOG_DATA 0 //use live analog data in demo mode
-#define GPS_DATA 0 //use live GPS data in demo mode
-#define REPORT_FREQ 5 //how many seconds between reports
-#define BALLOON_ID 11 //this needs to be different for each balloon.  DON'T FORGET!
-
-TinyGPSPlus gps;
-
-unsigned long myDate = 112214;
-unsigned long myTime = 11223344;
-double myLatitude = 38.874860;
-double myLongitude = -104.408872;
-double myAltitude = 6000;
-double mySpeed = 50.2;
-double myCourse = 94.2;
-unsigned int mySats = 8;
-double myHDOP = 1.04;
-int myRail = 4095;
-int myTemperature = 340;
-int myPressure = 3205;
-int myHumidity = 1023;
-int myGround = 0;
-
-void setup()
-{
-  //We're using the Due, let's actually use it
-  analogReadResolution(12);
-  
-  //Set up the serial ports - the two USB ports connected to the computer are set for high-
-  //speed operation to make things happen as quickly as possible
-  Serial.begin(115200);
-  Serial1.begin(4800);
-  Serial2.begin(115200);
-  Serial3.begin(4800);
-  SerialUSB.begin(115200);
-}
-
-void loop()
-{
-  if(!DEMO_MODE) sendRealData();
-  else sendDemoData();
-}
-
-void sendPEDGE()
-{
-  //Format: $PEDGE,<ID>,<GPSDate>,<GPSTime>,<GPSLat>,<GPSLon>,<GPSAlt>,<GPSSpd>,<GPSCourse>,<GPSNumSats>,<GPSHDOP>,<A1>,<A2>,<A3>,<A4>,<A5>*<CKSUM>
-  //Build the primary string out, omitting the '$' and '*' since they're not used for the checksum calcs
-  String sentence = "PEDGE,ID"+String(BALLOON_ID)+","+String(myDate)+","+String(myTime)+","+String(myLatitude,6)+","+String(myLongitude,6)+","+String(myAltitude)+","+String(mySpeed)+","+String(myCourse)+","+String(mySats)+","+String(myHDOP)+","+String(myRail)+","+String(myTemperature)+","+String(myPressure)+","+String(myHumidity)+","+String(myGround);
-  
-  //Calculate the checksum
-  int XORVal, i; //variable declaration for the following calculation
-  for(XORVal = 0, i = 0; i < sentence.length(); i++)
-  {
-    int c = (unsigned char)sentence[i];
-    XORVal ^= c;
-  }
-  
-  //Put it all together and send it
-  if(!DEMO_MODE)
-  {
-    //send it out the radio serial port
-    Serial2.print("$"); //the missing dollar sign
-    Serial2.print(sentence);
-    Serial2.print("*");
-    Serial2.println(XORVal, HEX);
-  }
-  else
-  {
-    //send it out the standard USB port
-    Serial.print("$"); //the missing dollar sign
-    Serial.print(sentence);
-    Serial.print("*");
-    Serial.println(XORVal, HEX);
-  }
-}
-
-//Just a demo for initial decoding development
-void sendDemoData()
-{
-  if(GPS_DATA)
-  {
-    unsigned long startTime = millis(); //get the starting time from the millisecond timer
-    while((millis() - startTime) < (REPORT_FREQ*1000)) //while we're waiting for our turn, send GPS data to TinyGPS++
-    {
-      if(Serial1.available())
-      {
-        gps.encode(Serial1.read());
-      }
-    }
-    if(gps.location.isValid())
-    {
-      collectGPSData();
-    }
-    else
-    {
-      sendErrorMessage();
-    }
-  }
-  else
-  {
-    delay(REPORT_FREQ*1000);
-  }
-  if(ANALOG_DATA) collectAnalogData();
-  sendPEDGE();
-  delay(REPORT_FREQ*1000);
-}
-
-void sendRealData()
-{
-  unsigned long startTime = millis(); //get the starting time from the millisecond timer
-  while((millis() - startTime) < (REPORT_FREQ*1000)) //while we're waiting for our turn, send GPS data to TinyGPS++
-  {
-    if(Serial1.available())
-    {
-      gps.encode(Serial1.read());
-    }
-  }
-  if(gps.location.isValid())
-  {
-    collectGPSData();
-    collectAnalogData();
-    sendPEDGE();
-  }
-  else
-  {
-    sendErrorMessage();
-    collectAnalogData();
-    sendPEDGE();
-  }
-}
-
-void collectGPSData()
-{
-  myDate = gps.date.value();
-  myTime = gps.time.value();
-  myLatitude = gps.location.lat();
-  myLongitude = gps.location.lng();
-  myAltitude = gps.altitude.meters();
-  mySpeed = gps.speed.knots();
-  myCourse = gps.course.deg();
-  mySats = gps.satellites.value();
-  myHDOP = gps.hdop.value()/100.0;
-}
-
-void collectAnalogData()
-{
-  myRail = analogRead(A7);
-  myTemperature = analogRead(A8);
-  myPressure = analogRead(A9);
-  myHumidity = analogRead(A10);
-  myGround = analogRead(A11);
-}
-
-void sendErrorMessage()
-{
-  if(!DEMO_MODE)
-  {
-    //send it out the radio serial port
-    Serial2.println("Something's wrong with the GPS.");
-  }
-  else
-  {
-    //send it out the standard USB port
-    Serial.println("Something's wrong with the GPS.");
-  }
-}
-
-*/
