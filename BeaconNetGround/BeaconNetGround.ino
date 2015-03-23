@@ -21,6 +21,7 @@ Analog inputs aren't used on the ground units.  For now.
 */
 
 #include <TinyGPS++.h>
+#include <G5500.h>
 
 //This function is required to overcome an error in the arduino core code for the Due.  Kinda sux, but that's how these things go.
 void serialEventRun(void) {
@@ -31,6 +32,7 @@ void serialEventRun(void) {
   if (SerialUSB.available()) serialEventUSB(); //then the port that *should* be Tx only
 }
 
+G5500 rotor = G5500(); // the antenna positioner object
 
 TinyGPSPlus LocalGPS; // the parser for the GPS that's - duh - locally attached to the board (Serial1)
 TinyGPSPlus RadioGPS; // the parser for the stream of data that's coming in over RF (Serial2)
@@ -79,20 +81,34 @@ TinyGPSCustom predictLon (RadioGPS, "PEDGP", 5);
 #define PREDICT_DATA 3
 #define IMMEADIATE 0
 
+#define POINT_ANTENNA 0 //set this to 1 if you want to move the G-5500 around automatically
+
 bool displayMessageMode = true; //Do you want to display a message or not?  
 bool commandMode = false;
 bool debugMode = true;
 
-unsigned long myDate;
-unsigned long myTime;
+//these are the variables that are used for most things in the code...
+unsigned long theDate;
+unsigned long theTime;
+double theLatitude;
+double theLongitude;
+double theAltitude;
+double theSpeed;
+double theCourse;
+unsigned int theSats;
+double theHDOP;
+
+//these are the variables that are used to keep track of where we are
+String myID;
 double myLatitude;
 double myLongitude;
 double myAltitude;
-double mySpeed;
-double myCourse;
-unsigned int mySats;
-double myHDOP;
-String myID;
+
+//here we have the navigational and pointing information
+double distance;
+double bearing;
+double azimuth;
+double elevation;
 
 void setup()
 { 
@@ -127,10 +143,23 @@ void loop()
     outputNMEA(PREDICT_DATA, 5); 
   }
   
+  if(LocalGPS.time.isUpdated())
+  {
+    if(debugMode) Serial.println("****Received new local position information.");
+    updateLocalPosition();
+  }
+  
   if(commandMode)
   {
     handleCommand();
   }
+}
+
+void updateLocalPosition()
+{
+  myLatitude = LocalGPS.location.lat();
+  myLongitude = LocalGPS.location.lng();
+  myAltitude = LocalGPS.altitude.meters();
 }
 
 void createUserMessage()
@@ -252,6 +281,7 @@ void handleCommand()
     Serial.println("****I: Place me on the map.");
     Serial.println("****C: Send a command. (not supported)");
     Serial.println("****D: Toggle debug mode.");
+    Serial.println("****N: Show navigational and pointing info");
     Serial.println("****G: Change your station ID (beta)");
   }
   
@@ -292,6 +322,11 @@ void handleCommand()
     }
   }
   
+  else if (cmd == 'N')
+  {
+    if(debugMode) Serial.println("\n****Displaying navigational and pointing info.");
+  }
+  
   else if (cmd == 'G')
   {
     if(debugMode) Serial.println("\n****Changing station ID.  Current ID is: " + myID);
@@ -327,45 +362,74 @@ void changeStationID()
 
 void collectBalloonData()
 {
-  myDate = (unsigned long)(String(balloonDate.value()).toFloat());
-  myTime = (unsigned long)(String(balloonTime.value()).toFloat());
-  myLatitude = abs(String(balloonLat.value()).toFloat());
-  myLongitude = abs(String(balloonLon.value()).toFloat());
-  myAltitude = String(balloonAlt.value()).toFloat();
-  mySpeed = String(balloonSpd.value()).toFloat();
-  myCourse = String(balloonCse.value()).toFloat();
+  theDate = (unsigned long)(String(balloonDate.value()).toFloat());
+  theTime = (unsigned long)(String(balloonTime.value()).toFloat());
+  theLatitude = abs(String(balloonLat.value()).toFloat());
+  theLongitude = abs(String(balloonLon.value()).toFloat());
+  theAltitude = String(balloonAlt.value()).toFloat();
+  theSpeed = String(balloonSpd.value()).toFloat();
+  theCourse = String(balloonCse.value()).toFloat();
   
   //hardcode these values, as they're not provided for messages...
-  mySats = 9;
-  myHDOP = 1.0;
+  theSats = 9;
+  theHDOP = 1.0;
+  
+  //update navigation and pointing solutions here (maybe switch on if we are autopointing an antenn?)
+  updateNavAndPointing();
+}
+
+//TODO: check on whether typecasting is needed on the custom types, also check on sign convention
+//TODO: debug stuff in a helpful way
+void updateNavAndPointing()
+{
+  distance = LocalGPS.distanceBetween(myLatitude, myLongitude, balloonLat.value(), balloonLon.value());
+  bearing = LocalGPS.courseTo(myLatitude, myLongitude, balloonLat.value(), balloonLon.value());
+  azimuth = bearing; //for now
+  elevation = (180/PI)*(((balloonAlt.value()-myAltitude)/distance)-(distance/(2000*6378.1)));
+  
+  if(POINT_ANTENNA) pointAntenna();
+}
+
+void pointAntenna()
+{
+  rotor.setAzEl(azimuth, elevation);
+  //TODO: Debug here
+}
+
+void printNavAndPointing()
+{
+  Serial.println("\nDistance to balloon: " + String(int(distance)/1000) + "km / " + String(int(distance)/1609) + "mi");
+  Serial.println("Bearing / azimuth to balloon: " + String(int(bearing)) + " degrees");
+  Serial.println("Elevation angle to balloon: " + String(int(elevation)) + " degrees");
+  Serial.println();
 }
 
 void collectMessageData()
 {
-  myDate = (unsigned long)(String(messageDate.value()).toFloat());
-  myTime = (unsigned long)(String(messageTime.value()).toFloat());
-  myLatitude = abs(String(messageLat.value()).toFloat());
-  myLongitude = abs(String(messageLon.value()).toFloat());
-  myAltitude = String(messageAlt.value()).toFloat();
-  mySpeed = String(messageSpd.value()).toFloat();
-  myCourse = String(messageCse.value()).toFloat();
-  mySats = (unsigned int)(String(balloonNumSats.value()).toInt());
-  myHDOP = String(balloonHDOP.value()).toFloat();
+  theDate = (unsigned long)(String(messageDate.value()).toFloat());
+  theTime = (unsigned long)(String(messageTime.value()).toFloat());
+  theLatitude = abs(String(messageLat.value()).toFloat());
+  theLongitude = abs(String(messageLon.value()).toFloat());
+  theAltitude = String(messageAlt.value()).toFloat();
+  theSpeed = String(messageSpd.value()).toFloat();
+  theCourse = String(messageCse.value()).toFloat();
+  theSats = (unsigned int)(String(balloonNumSats.value()).toInt());
+  theHDOP = String(balloonHDOP.value()).toFloat();
 }
 
 void collectPredictData()
 {
-  myDate = (unsigned long)(String(predictDate.value()).toFloat());
-  myTime = (unsigned long)(String(predictTime.value()).toFloat());
-  myLatitude = abs(String(predictLat.value()).toFloat());
-  myLongitude = abs(String(predictLon.value()).toFloat());
+  theDate = (unsigned long)(String(predictDate.value()).toFloat());
+  theTime = (unsigned long)(String(predictTime.value()).toFloat());
+  theLatitude = abs(String(predictLat.value()).toFloat());
+  theLongitude = abs(String(predictLon.value()).toFloat());
   
   //hardcode these values, as they're not provided for prerdicted landing sites...
-  myAltitude = 1800.0;
-  mySpeed = 0.0;
-  myCourse = 0.0;
-  mySats = 9;
-  myHDOP = 1.0;
+  theAltitude = 1800.0;
+  theSpeed = 0.0;
+  theCourse = 0.0;
+  theSats = 9;
+  theHDOP = 1.0;
 }
 
 void outputNMEA(int mode, int repeats)
@@ -384,39 +448,39 @@ void outputNMEA(int mode)
   
   if(debugMode)
   {
-    Serial.println("Date: " + String(myDate));
-    Serial.println("Time: " + String(myTime));
-    Serial.println("Lat : " + String(myLatitude, 6));
-    Serial.println("Lng : " + String(myLongitude, 6));
-    Serial.println("Alt : " + String(myAltitude));
-    Serial.println("Spd : " + String(mySpeed));
-    Serial.println("Cse : " + String(myCourse));
-    Serial.println("Sats: " + String(mySats));
-    Serial.println("HDOP: " + String(myHDOP));
+    Serial.println("Date: " + String(theDate));
+    Serial.println("Time: " + String(theTime));
+    Serial.println("Lat : " + String(theLatitude, 6));
+    Serial.println("Lng : " + String(theLongitude, 6));
+    Serial.println("Alt : " + String(theAltitude));
+    Serial.println("Spd : " + String(theSpeed));
+    Serial.println("Cse : " + String(theCourse));
+    Serial.println("Sats: " + String(theSats));
+    Serial.println("HDOP: " + String(theHDOP));
   }
   
   //Pad date here...
-  String sMyDate;
-  if(myDate > 99999) sMyDate = String(myDate);
-  else sMyDate = "0" + String(myDate); 
+  String stheDate;
+  if(theDate > 99999) stheDate = String(theDate);
+  else stheDate = "0" + String(theDate); 
   
   //Pad time here...
-  String sMyTime;
-  myTime = myTime / 100; //remove the trailign DeciSecond zeros from the time
-  if(myTime > 99999) sMyTime = String(myTime);
-  else if(myTime > 9999) sMyTime = "0" + String(myTime);
-  else if(myTime > 999) sMyTime = "00" + String(myTime);
-  else if(myTime > 99) sMyTime = "000" + String(myTime);
-  else if(myTime > 9) sMyTime = "0000" + String(myTime);
-  else if(myTime > 0) sMyTime = "00000" + String(myTime);
-  else sMyTime = "000000";
+  String stheTime;
+  theTime = theTime / 100; //remove the trailign DeciSecond zeros from the time
+  if(theTime > 99999) stheTime = String(theTime);
+  else if(theTime > 9999) stheTime = "0" + String(theTime);
+  else if(theTime > 999) stheTime = "00" + String(theTime);
+  else if(theTime > 99) stheTime = "000" + String(theTime);
+  else if(theTime > 9) stheTime = "0000" + String(theTime);
+  else if(theTime > 0) stheTime = "00000" + String(theTime);
+  else stheTime = "000000";
   
   //Pad latitude here... not worring about latitudes less than 10, as we're not flying in Central America
   int myLatDeg;
   float myLatMin;
   String sMyLat;
-  myLatDeg = int(myLatitude); //get just the degrees of the latitude
-  myLatMin = (myLatitude - myLatDeg) * 60; // calculate minutes from the decimal remainder of the original
+  myLatDeg = int(theLatitude); //get just the degrees of the latitude
+  myLatMin = (theLatitude - myLatDeg) * 60; // calculate minutes from the decimal remainder of the original
   if(myLatMin > 9) sMyLat = String(myLatDeg) + String(myLatMin,3);
   else sMyLat = String(myLatDeg) + "0" + String(myLatMin,3);
   
@@ -426,8 +490,8 @@ void outputNMEA(int mode)
   String sMyLngDeg;
   String sMyLngMin;
   String sMyLng;
-  myLngDeg = int(myLongitude); 
-  myLngMin = (myLongitude - myLngDeg) * 60;
+  myLngDeg = int(theLongitude); 
+  myLngMin = (theLongitude - myLngDeg) * 60;
   //Pad the degrees field here
   if(myLngDeg > 99) sMyLngDeg = String(myLngDeg);
   else sMyLngDeg = "0" + String(myLngDeg);
@@ -438,25 +502,25 @@ void outputNMEA(int mode)
   sMyLng = sMyLngDeg + sMyLngMin;
   
   //Pad numSats here
-  String sMySats;
-  if(mySats > 9) sMySats = String(mySats);
-  else sMySats = "0" + String(mySats);
+  String stheSats;
+  if(theSats > 9) stheSats = String(theSats);
+  else stheSats = "0" + String(theSats);
   
   //Pad speed here
-  String sMySpeed;
-  if(mySpeed > 99) sMySpeed = String(mySpeed, 1);
-  else if(mySpeed > 9) sMySpeed = "0" + String(mySpeed, 1);
-  else if(mySpeed > 0) sMySpeed = "00" + String(mySpeed, 1);
+  String stheSpeed;
+  if(theSpeed > 99) stheSpeed = String(theSpeed, 1);
+  else if(theSpeed > 9) stheSpeed = "0" + String(theSpeed, 1);
+  else if(theSpeed > 0) stheSpeed = "00" + String(theSpeed, 1);
 
   //Pad course here
-  String sMyCourse;
-  if(myCourse > 99) sMyCourse = String(myCourse, 1);
-  else if(myCourse > 9) sMyCourse = "0" + String(myCourse, 1);
-  else if(myCourse > 0) sMyCourse = "00" + String(myCourse, 1);
+  String stheCourse;
+  if(theCourse > 99) stheCourse = String(theCourse, 1);
+  else if(theCourse > 9) stheCourse = "0" + String(theCourse, 1);
+  else if(theCourse > 0) stheCourse = "00" + String(theCourse, 1);
 
   
   //the GGA sentence
-  String sentence = "GPGGA,"+sMyTime+","+sMyLat+",N,"+sMyLng+",W,1,"+sMySats+","+String(myHDOP)+","+String(myAltitude)+",M,30.0,M,,";
+  String sentence = "GPGGA,"+stheTime+","+sMyLat+",N,"+sMyLng+",W,1,"+stheSats+","+String(theHDOP)+","+String(theAltitude)+",M,30.0,M,,";
   
   //Calculate the checksum
   int XORVal, i; //variable declaration for the following calculation
@@ -482,7 +546,7 @@ void outputNMEA(int mode)
   }
   
   //The RMC sentence, hard coded for magnetic variation in CO
-  sentence = "GPRMC,"+sMyTime+",A,"+sMyLat+",N,"+sMyLng+",W,"+sMySpeed+","+sMyCourse+","+sMyDate+",008.1,E";
+  sentence = "GPRMC,"+stheTime+",A,"+sMyLat+",N,"+sMyLng+",W,"+stheSpeed+","+stheCourse+","+stheDate+",008.1,E";
   
   //Calculate the checksum
   XORVal, i; //variable declaration for the following calculation
