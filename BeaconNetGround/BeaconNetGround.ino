@@ -1,6 +1,7 @@
 //Primary code for the airborne system for BEACONNet
 //Targeted for the Arduino Due
 //Developed against TinyGPS++ v0.94b
+//Developed against G5500 commit 05aece5787
 
 /*
 Purpose of this code is to provide the BEACONNet functionality to
