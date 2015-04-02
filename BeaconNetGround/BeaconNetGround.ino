@@ -383,10 +383,15 @@ void collectBalloonData()
 //TODO: debug stuff in a helpful way
 void updateNavAndPointing()
 {
-  distance = LocalGPS.distanceBetween(myLatitude, myLongitude, balloonLat.value(), balloonLon.value());
-  bearing = LocalGPS.courseTo(myLatitude, myLongitude, balloonLat.value(), balloonLon.value());
+  theLatitude = abs(String(balloonLat.value()).toFloat());
+  theLongitude = abs(String(balloonLon.value()).toFloat());
+  theAltitude = String(balloonAlt.value()).toFloat();
+  distance = LocalGPS.distanceBetween(myLatitude, myLongitude, theLatitude, theLongitude);
+  bearing = LocalGPS.courseTo(myLatitude, myLongitude, theLatitude, theLongitude);
   azimuth = bearing; //for now
-  elevation = (180/PI)*(((balloonAlt.value()-myAltitude)/distance)-(distance/(2000*6378.1)));
+  elevation = (180/PI)*(((theAltitude-myAltitude)/distance)-(distance/(2000*6378.1)));
+  
+  Serial.println("****Balloon is " + String(distance, 2) + "km away at a bearing of " + String(bearing, 2) + " degrees.");
   
   if(POINT_ANTENNA) pointAntenna();
 }
@@ -394,7 +399,7 @@ void updateNavAndPointing()
 void pointAntenna()
 {
   rotor.setAzEl(azimuth, elevation);
-  //TODO: Debug here
+  if(debugMode) Serial.println("****Set antenna to: " + String(azimuth, 2) + ", " + String(elevation, 2));
 }
 
 void printNavAndPointing()
