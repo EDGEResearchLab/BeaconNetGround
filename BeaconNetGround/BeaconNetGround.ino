@@ -72,7 +72,7 @@ TinyGPSCustom predictTime (RadioGPS, "PEDGP", 3);
 TinyGPSCustom predictLat (RadioGPS, "PEDGP", 4);
 TinyGPSCustom predictLon (RadioGPS, "PEDGP", 5);
 
-#define GROUND_ID 1 //this needs to be different for each ground system.  DON"T FOGET!
+#define GROUND_ID 3 //this needs to be different for each ground system.  DON"T FOGET!
 #define CMD_TIMEOUT 5 //how long to stay in command mode before timing out 
 #define POS_TIMEOUT 5 //how long to display my position before timing out
 
@@ -87,6 +87,11 @@ TinyGPSCustom predictLon (RadioGPS, "PEDGP", 5);
 bool displayMessageMode = true; //Do you want to display a message or not?  
 bool commandMode = false;
 bool debugMode = true;
+bool beaconMode = true;
+
+unsigned long currentTime = 0;
+unsigned long lastBeaconTime = 0;
+unsigned long beaconInterval = 67000;
 
 //these are the variables that are used for most things in the code...
 unsigned long theDate;
@@ -99,11 +104,11 @@ double theCourse;
 unsigned int theSats;
 double theHDOP;
 
-//these are the variables that are used to keep track of where we are
+//these are the variables that are used to keep track of where we are, defaulted to CO49
 String myID;
-double myLatitude;
-double myLongitude;
-double myAltitude;
+double myLatitude = 38.874401;
+double myLongitude = 104.409401;
+double myAltitude = 1600;
 
 //here we have the navigational and pointing information
 double distance;
@@ -122,6 +127,8 @@ void setup()
   SerialUSB.begin(115200);
   
   myID = "GID"+String(GROUND_ID);
+  
+  updateNavAndPointing();
 }
 
 void loop()
@@ -154,6 +161,13 @@ void loop()
   {
     handleCommand();
   }
+  
+  currentTime = millis();
+  if(beaconMode && ((currentTime - lastBeaconTime) > beaconInterval))
+  {
+    if(debugMode) Serial.println("****Beaconing local position to the network");
+    beaconMyPosition();
+  }
 }
 
 void updateLocalPosition()
@@ -161,6 +175,37 @@ void updateLocalPosition()
   myLatitude = LocalGPS.location.lat();
   myLongitude = LocalGPS.location.lng();
   myAltitude = LocalGPS.altitude.meters();
+}
+
+void beaconMyPosition() //create a user message automatically, to share your current location with the network
+{
+  lastBeaconTime = millis();
+  String userMessage = "myPosition";
+  String sentence = "PEDGM,"+myID+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(myLatitude,6)+","+String(myLongitude,6)+","+String(myAltitude)+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
+  
+  //Calculate the checksum
+  int XORVal, i; //variable declaration for the following calculation
+  for(XORVal = 0, i = 0; i < sentence.length(); i++)
+  {
+    int c = (unsigned char)sentence[i];
+    XORVal ^= c;
+  }
+  
+  //send it out the radio serial port
+  Serial2.print("$"); //the missing dollar sign
+  Serial2.print(sentence);
+  Serial2.print("*");
+  Serial2.println(XORVal, HEX);
+  
+  if(debugMode)
+  {
+    Serial.print("\nOutput String: ");
+    Serial.print("$"); 
+    Serial.print(sentence);
+    Serial.print("*");
+    Serial.println(XORVal, HEX);
+  }
+  
 }
 
 void createUserMessage()
@@ -177,7 +222,7 @@ void createUserMessage()
     return;
   }
   
-  String sentence = "PEDGM,"+myID+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(LocalGPS.location.lat(),6)+","+String(LocalGPS.location.lng(),6)+","+String(LocalGPS.altitude.meters())+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
+  String sentence = "PEDGM,"+myID+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(myLatitude,6)+","+String(myLongitude,6)+","+String(myAltitude)+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
   
   //Calculate the checksum
   int XORVal, i; //variable declaration for the following calculation
@@ -281,6 +326,7 @@ void handleCommand()
     Serial.println("****P: Send predict message.");
     Serial.println("****I: Place me on the map.");
     Serial.println("****C: Send a command. (not supported)");
+    Serial.println("****B: Toggle position beacons");
     Serial.println("****D: Toggle debug mode.");
     Serial.println("****N: Show navigational and pointing info");
     Serial.println("****G: Change your station ID (beta)");
@@ -323,9 +369,25 @@ void handleCommand()
     }
   }
   
+  else if (cmd == 'D') //Handle the request to beacon my position
+  {
+    if(beaconMode)
+    {
+      Serial.println("\n*****You're turning off position beacon mode.");
+      beaconMode = false;
+    }
+    else
+    {
+      Serial.println("\n****You're turning on position beacon mode.");
+      beaconMode = true;
+      lastBeaconTime = millis();
+    }
+  }
+  
   else if (cmd == 'N')
   {
     if(debugMode) Serial.println("\n****Displaying navigational and pointing info.");
+    printNavAndPointing();
   }
   
   else if (cmd == 'G')
@@ -386,12 +448,10 @@ void updateNavAndPointing()
   theLatitude = abs(String(balloonLat.value()).toFloat());
   theLongitude = abs(String(balloonLon.value()).toFloat());
   theAltitude = String(balloonAlt.value()).toFloat();
-  distance = LocalGPS.distanceBetween(myLatitude, myLongitude, theLatitude, theLongitude);
-  bearing = LocalGPS.courseTo(myLatitude, myLongitude, theLatitude, theLongitude);
+  distance = LocalGPS.distanceBetween(myLatitude, (-1*myLongitude), theLatitude, (-1*theLongitude)); //the -1 is a hack, but it assumes that we're in the western hemisphere
+  bearing = LocalGPS.courseTo(myLatitude, (-1*myLongitude), theLatitude, (-1*theLongitude)); //the -1 is a hack, but it assumes that we're in the western hemisphere
   azimuth = bearing; //for now
   elevation = (180/PI)*(((theAltitude-myAltitude)/distance)-(distance/(2000*6378.1)));
-  
-  Serial.println("****Balloon is " + String(distance, 2) + "km away at a bearing of " + String(bearing, 2) + " degrees.");
   
   if(POINT_ANTENNA) pointAntenna();
 }
@@ -404,9 +464,9 @@ void pointAntenna()
 
 void printNavAndPointing()
 {
-  Serial.println("\nDistance to balloon: " + String(int(distance)/1000) + "km / " + String(int(distance)/1609) + "mi");
-  Serial.println("Bearing / azimuth to balloon: " + String(int(bearing)) + " degrees");
-  Serial.println("Elevation angle to balloon: " + String(int(elevation)) + " degrees");
+  Serial.println("****Distance to balloon: " + String(int(distance)/1000) + "km / " + String(int(distance)/1609) + "mi");
+  Serial.println("****Bearing / azimuth to balloon: " + String(int(bearing)) + " degrees");
+  Serial.println("****Elevation angle to balloon: " + String(int(elevation)) + " degrees\n");
   Serial.println();
 }
 
@@ -587,7 +647,7 @@ void parseAndDisplayMessage()
     Serial.println("Message received with the following position information included: ");
   }
   
-  outputNMEA(MESSAGE_DATA, 5); 
+  outputNMEA(MESSAGE_DATA, 10); 
 }
 
 
@@ -630,7 +690,9 @@ void serialEvent2() //Event handler / buffer flusher for the RF port
 {
   while(Serial2.available())
   {
-    RadioGPS.encode(Serial2.read());
+    char dataReceived = Serial2.read();
+    RadioGPS.encode(dataReceived);
+    Serial.print(dataReceived); //echo data to the command port
   }
 }
 
