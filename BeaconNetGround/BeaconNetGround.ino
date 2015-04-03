@@ -109,6 +109,7 @@ String myID;
 double myLatitude = 38.874401;
 double myLongitude = 104.409401;
 double myAltitude = 1600;
+unsigned long myTime = 11223344;
 
 //here we have the navigational and pointing information
 double distance;
@@ -153,7 +154,7 @@ void loop()
   
   if(LocalGPS.time.isUpdated())
   {
-    if(debugMode) Serial.println("****Received new local position information.");
+    //if(debugMode) Serial.println("****Received new local position information."); //Turning this off - it's too annoying.
     updateLocalPosition();
   }
   
@@ -175,13 +176,14 @@ void updateLocalPosition()
   myLatitude = LocalGPS.location.lat();
   myLongitude = LocalGPS.location.lng();
   myAltitude = LocalGPS.altitude.meters();
+  myTime = LocalGPS.time.value();
 }
 
 void beaconMyPosition() //create a user message automatically, to share your current location with the network
 {
   lastBeaconTime = millis();
   String userMessage = "myPosition";
-  String sentence = "PEDGM,"+myID+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(myLatitude,6)+","+String(myLongitude,6)+","+String(myAltitude)+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
+  String sentence = "PEDGM,"+myID+","+String(LocalGPS.date.value())+","+String(myTime)+","+String(myLatitude,6)+","+String(myLongitude,6)+","+String(myAltitude)+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
   
   //Calculate the checksum
   int XORVal, i; //variable declaration for the following calculation
@@ -222,7 +224,7 @@ void createUserMessage()
     return;
   }
   
-  String sentence = "PEDGM,"+myID+","+String(LocalGPS.date.value())+","+String(LocalGPS.time.value())+","+String(myLatitude,6)+","+String(myLongitude,6)+","+String(myAltitude)+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
+  String sentence = "PEDGM,"+myID+","+String(LocalGPS.date.value())+","+String(myTime)+","+String(myLatitude,6)+","+String(myLongitude,6)+","+String(myAltitude)+","+String(LocalGPS.speed.knots())+","+String(LocalGPS.course.deg())+","+userMessage;
   
   //Calculate the checksum
   int XORVal, i; //variable declaration for the following calculation
@@ -447,6 +449,8 @@ void updateNavAndPointing()
 {
   theLatitude = abs(String(balloonLat.value()).toFloat());
   theLongitude = abs(String(balloonLon.value()).toFloat());
+  myLatitude = abs(myLatitude);
+  myLongitude = abs(myLongitude);
   theAltitude = String(balloonAlt.value()).toFloat();
   distance = LocalGPS.distanceBetween(myLatitude, (-1*myLongitude), theLatitude, (-1*theLongitude)); //the -1 is a hack, but it assumes that we're in the western hemisphere
   bearing = LocalGPS.courseTo(myLatitude, (-1*myLongitude), theLatitude, (-1*theLongitude)); //the -1 is a hack, but it assumes that we're in the western hemisphere
@@ -690,9 +694,7 @@ void serialEvent2() //Event handler / buffer flusher for the RF port
 {
   while(Serial2.available())
   {
-    char dataReceived = Serial2.read();
-    RadioGPS.encode(dataReceived);
-    Serial.print(dataReceived); //echo data to the command port
+    RadioGPS.encode(Serial2.read());
   }
 }
 
