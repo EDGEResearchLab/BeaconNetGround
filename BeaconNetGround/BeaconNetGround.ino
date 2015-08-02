@@ -79,9 +79,12 @@ TinyGPSCustom predictLon (RadioGPS, "PEDGP", 5);
 #define PREDICT_DATA 3
 #define IMMEADIATE 0
 
+#define KEEPALIVE_PERIOD 5 //number of seconds to wait before outputting a duplicate NMEA point for the balloon
+
 bool displayMessageMode = true; //Do you want to display a message or not?  
 bool commandMode = false;
 bool debugMode = true;
+bool keepaliveMode = true;
 
 unsigned long myDate;
 unsigned long myTime;
@@ -94,6 +97,8 @@ unsigned int mySats;
 double myHDOP;
 String myID;
 
+unsigned long mainTime;
+
 void setup()
 { 
   //Set up the serial ports - the two USB ports connected to the computer are set for high-
@@ -105,6 +110,8 @@ void setup()
   SerialUSB.begin(115200);
   
   myID = "GID"+String(GROUND_ID);
+  
+  mainTime = millis(); //capture the current reading of the millis timer for keepalive function
 }
 
 void loop()
@@ -113,23 +120,38 @@ void loop()
   {
     if(debugMode) Serial.println("****Received position update from balloon " + String(balloonID.value()));
     outputNMEA(BALLOON_DATA);
+    mainTime = millis();  //"reset" the timer for keepalive output
   }
   
   if(messageTime.isUpdated())
   {
     if(debugMode) Serial.println("****Received message from ground station " + String(messageID.value()));
     parseAndDisplayMessage();
+    mainTime = millis(); //"reset" the timer for keepalive output
   }
   
   if(predictTime.isUpdated())
   {
     if(debugMode) Serial.println("****Received new predicted landing point for " + String(predictID.value()));
     outputNMEA(PREDICT_DATA, 5); 
+    mainTime = millis(); //"reset" the timer for keepalive output
   }
   
   if(commandMode)
   {
     handleCommand();
+    mainTime = millis(); //"reset" the timer for keepalive output
+  }
+  
+  if((millis() - mainTime) > KEEPALIVE_PERIOD * 1000)  //if this happens, you haven't heard from the balloon in a while...
+  {
+    if(keepaliveMode)
+    {
+      double elapsedTime = (millis() - mainTime)/1000;
+      if(debugMode) Serial.println("****KEEPALIVE MESSAGE GENERATED - NO UPDATE FROM BALLOON IN " + String(elapsedTime) + " SECONDS.");
+      outputNMEA(BALLOON_DATA);
+      mainTime = millis(); //"reset" the timer for keepalive output
+    }
   }
 }
 
@@ -252,6 +274,7 @@ void handleCommand()
     Serial.println("****I: Place me on the map.");
     Serial.println("****C: Send a command. (not supported)");
     Serial.println("****D: Toggle debug mode.");
+    Serial.println("****K: Toggle keepalive mode.");
     Serial.println("****G: Change your station ID (beta)");
   }
   
@@ -289,6 +312,20 @@ void handleCommand()
     {
       Serial.println("\n****You're turning on debug mode.");
       debugMode = true;
+    }
+  }
+  
+  else if (cmd == 'K') //Handle the request to toggle keepalive mode
+  {
+    if(keepaliveMode)
+    {
+      if(debugMode) Serial.println("\n*****You're turning off keepalive mode.");
+      keepaliveMode = false;
+    }
+    else
+    {
+      if(debugMode) Serial.println("\n****You're turning on keepalive mode.");
+      keepaliveMode = true;
     }
   }
   
